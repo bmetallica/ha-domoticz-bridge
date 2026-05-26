@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HA-Domoticz Bridge</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    [v-cloak] { display: none; }
+    body { background-color: #f3f4f6; color: #1f2937; }
+  </style>
+</head>
+<body class="antialiased">
+  <div id="app" v-cloak class="min-h-screen flex flex-col">
+    <!-- Navbar -->
+    <nav class="bg-blue-600 text-white shadow-md">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex justify-between h-16">
+          <div class="flex items-center">
+            <i class="fa-solid fa-bridge text-2xl mr-3"></i>
+            <span class="font-bold text-xl">HA-Domoticz Bridge</span>
+          </div>
+          <div class="flex items-center space-x-4">
+            <button @click="currentTab = 'dashboard'" :class="{'bg-blue-700': currentTab === 'dashboard'}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-blue-700">Dashboard</button>
+            <button @click="currentTab = 'paired'" :class="{'bg-blue-700': currentTab === 'paired'}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-blue-700">Paired Devices</button>
+            <button @click="currentTab = 'settings'" :class="{'bg-blue-700': currentTab === 'settings'}" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-blue-700">Settings</button>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="flex-grow container mx-auto px-4 py-8 max-w-7xl">
+      
+      <!-- Dashboard Tab -->
+      <div v-if="currentTab === 'dashboard'">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-2xl font-bold text-gray-800">Device Discovery & Pairing</h2>
+          <button @click="fetchDevices" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded shadow flex items-center">
+            <i class="fa-solid fa-sync mr-2" :class="{'fa-spin': loading}"></i> Refresh Devices
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          
+          <!-- Domoticz Column -->
+          <div class="bg-white rounded-lg shadow-md p-6">
+            <h3 class="text-xl font-bold text-blue-600 mb-4 border-b pb-2 flex items-center">
+              <img src="https://www.domoticz.com/wiki/images/f/f6/Domoticz-logo-500x500.png" class="w-6 h-6 mr-2" alt="Domoticz">
+              Unpaired Domoticz Devices
+            </h3>
+            <div class="mb-4 flex items-center gap-3">
+              <label for="domoticz-type-filter" class="text-sm font-medium text-gray-700 whitespace-nowrap">Filter by type</label>
+              <select id="domoticz-type-filter" v-model="domoticzTypeFilter" class="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                <option value="all">All types</option>
+                <option v-for="type in domoticzTypeOptions" :key="type" :value="type">{{ type }}</option>
+              </select>
+            </div>
+            <div class="overflow-y-auto max-h-[600px] pr-2">
+              <div v-if="loading" class="text-gray-500 text-center py-4">Loading...</div>
+              <div v-else-if="Object.keys(groupedDomoticzDevices).length === 0" class="text-gray-500 text-center py-4">No unpaired devices found.</div>
+              <div v-else v-for="(devices, type) in groupedDomoticzDevices" :key="type" class="mb-4">
+                <h4 class="font-semibold text-gray-700 mb-2">{{ type }}</h4>
+                <div v-for="dev in devices" :key="dev.idx" class="border rounded p-3 mb-2 hover:bg-gray-50 flex justify-between items-center transition-colors">
+                  <div>
+                    <div class="font-bold text-gray-800">{{ dev.Name }}</div>
+                    <div class="text-xs text-gray-500">Idx: {{ dev.idx }} | SubType: {{ dev.SubType }}</div>
+                  </div>
+                  <button @click="pairToHa(dev)" class="bg-blue-500 hover:bg-blue-600 text-white text-xs px-3 py-1.5 rounded shadow whitespace-nowrap">
+                    <i class="fa-solid fa-arrow-right mr-1"></i> Pair to HA
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Home Assistant Column -->
+          <div class="bg-white rounded-lg shadow-md p-6">
+            <h3 class="text-xl font-bold text-blue-600 mb-4 border-b pb-2 flex items-center">
+              <img src="https://brands.home-assistant.io/homeassistant/icon.png" class="w-6 h-6 mr-2" alt="Home Assistant">
+              Unpaired HA Entities
+            </h3>
+            <div class="overflow-y-auto max-h-[600px] pr-2">
+              <div v-if="loading" class="text-gray-500 text-center py-4">Loading...</div>
+              <div v-else-if="Object.keys(groupedHaDevices).length === 0" class="text-gray-500 text-center py-4">No unpaired entities found.</div>
+              <div v-else v-for="(devices, domain) in groupedHaDevices" :key="domain" class="mb-4">
+                <h4 class="font-semibold text-gray-700 mb-2 uppercase text-sm tracking-wider">{{ domain }}</h4>
+                <div v-for="entity in devices" :key="entity.entity_id" class="border rounded p-3 mb-2 hover:bg-gray-50 flex justify-between items-center transition-colors">
+                  <button @click="pairToDomoticz(entity)" class="bg-indigo-500 hover:bg-indigo-600 text-white text-xs px-3 py-1.5 rounded shadow whitespace-nowrap mr-3">
+                    <i class="fa-solid fa-arrow-left mr-1"></i> Pair to Domoticz
+                  </button>
+                  <div class="text-right">
+                    <div class="font-bold text-gray-800">{{ entity.attributes.friendly_name || entity.entity_id }}</div>
+                    <div class="text-xs text-gray-500">{{ entity.entity_id }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Paired Devices Tab -->
+      <div v-if="currentTab === 'paired'" class="max-w-4xl mx-auto">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-2xl font-bold text-gray-800">Paired Devices</h2>
+          <button @click="fetchDevices" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded shadow flex items-center">
+            <i class="fa-solid fa-sync mr-2" :class="{'fa-spin': loading}"></i> Refresh
+          </button>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-md p-6">
+          <div v-if="pairings.length === 0" class="text-gray-500 text-center py-8">
+            No devices are paired yet. Go to the Dashboard to pair devices.
+          </div>
+          <div v-else class="space-y-4">
+            <div v-for="pairing in pairings" :key="pairing.domoticzIdx" class="border border-green-200 bg-green-50 rounded-lg p-4 flex justify-between items-center">
+              <div class="flex items-center space-x-4">
+                <div class="bg-white p-2 rounded shadow-sm flex flex-col items-center">
+                  <img src="https://www.domoticz.com/wiki/images/f/f6/Domoticz-logo-500x500.png" class="w-5 h-5 mb-1" alt="Domoticz">
+                  <span class="text-xs font-mono text-gray-600">Idx: {{ pairing.domoticzIdx }}</span>
+                </div>
+                <i class="fa-solid fa-link text-green-500"></i>
+                <div class="bg-white p-2 rounded shadow-sm flex flex-col items-center">
+                  <img src="https://brands.home-assistant.io/homeassistant/icon.png" class="w-5 h-5 mb-1" alt="HA">
+                  <span class="text-xs font-mono text-gray-600">{{ pairing.haEntityId }}</span>
+                </div>
+                <div class="ml-4">
+                  <div class="font-bold text-gray-800">{{ pairing.name || 'Unknown Name' }}</div>
+                  <div class="text-sm text-gray-500">{{ pairing.domoticzType }} → {{ pairing.haType }}</div>
+                </div>
+              </div>
+              <button @click="unpair(pairing.domoticzIdx)" class="text-red-500 hover:text-red-700 bg-red-100 hover:bg-red-200 px-3 py-1.5 rounded transition">
+                <i class="fa-solid fa-unlink mr-1"></i> Unpair
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Tab -->
+      <div v-if="currentTab === 'settings'" class="max-w-3xl mx-auto">
+        <h2 class="text-2xl font-bold text-gray-800 mb-6">System Configuration</h2>
+        
+        <form @submit.prevent="saveConfig" class="space-y-6">
+          <!-- MQTT Settings -->
+          <div class="bg-white p-6 rounded-lg shadow-md">
+            <h3 class="text-lg font-medium text-gray-900 border-b pb-2 mb-4">MQTT Broker</h3>
+            <div class="grid grid-cols-1 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700">Broker URL</label>
+                <input v-model="config.mqtt.broker" type="text" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700">Username (Optional)</label>
+                  <input v-model="config.mqtt.username" type="text" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700">Password (Optional)</label>
+                  <input v-model="config.mqtt.password" type="password" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Domoticz Settings -->
+          <div class="bg-white p-6 rounded-lg shadow-md">
+            <h3 class="text-lg font-medium text-gray-900 border-b pb-2 mb-4">Domoticz Settings</h3>
+            <div class="grid grid-cols-1 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700">Domoticz URL</label>
+                <input v-model="config.domoticz.url" type="text" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700">Username</label>
+                  <input v-model="config.domoticz.username" type="text" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700">Password</label>
+                  <input v-model="config.domoticz.password" type="password" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700">MQTT Topic IN</label>
+                  <input v-model="config.domoticz.topicIn" type="text" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700">MQTT Topic OUT</label>
+                  <input v-model="config.domoticz.topicOut" type="text" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Home Assistant Settings -->
+          <div class="bg-white p-6 rounded-lg shadow-md">
+            <h3 class="text-lg font-medium text-gray-900 border-b pb-2 mb-4">Home Assistant Settings</h3>
+            <div class="grid grid-cols-1 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700">Home Assistant URL</label>
+                <input v-model="config.ha.url" type="text" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700">Long-Lived Access Token</label>
+                <textarea v-model="config.ha.token" rows="3" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500"></textarea>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700">MQTT Discovery Prefix</label>
+                <input v-model="config.ha.discoveryPrefix" type="text" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+              </div>
+            </div>
+          </div>
+
+          <!-- Save Button -->
+          <div class="flex justify-end">
+            <span v-if="saveMessage" class="text-green-600 mr-4 self-center font-medium">{{ saveMessage }}</span>
+            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded shadow-md">
+              Save Settings
+            </button>
+          </div>
+        </form>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

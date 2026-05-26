@@ -1,0 +1,15 @@
+services:
+  ha-domoticz-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ha-domoticz-bridge
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+    volumes:
+      - ./config.json:/app/config.json
+      - ./pairings.json:/app/pairings.json
+    restart: unless-stopped
